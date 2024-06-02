@@ -23,23 +23,17 @@ def duplicate_interleave(m):
     return m
 
 def apply_rotary_pos_emb(x, sin, cos, scale=1):
-    print("shape___2")
-    print("x:", x.shape)
-    print("sin before duplication:", sin.shape)
-    print("cos before duplication:", cos.shape)
+    
 
     sin, cos = map(lambda t: duplicate_interleave(t * scale), (sin, cos))
 
-    print("sin after duplication:", sin.shape)
-    print("cos after duplication:", cos.shape)
+    
 
     # Adjusting dimensions to match x
     sin = sin.unsqueeze(0).unsqueeze(2)
     cos = cos.unsqueeze(0).unsqueeze(2)
 
-    print("sin adjusted:", sin.shape)
-    print("cos adjusted:", cos.shape)
-
+    
     return (x * cos[:, :, :x.shape[2], :x.shape[-1]]) + (_rotate_every_two(x) * sin[:, :, :x.shape[2], :x.shape[-1]])
 
 class XPOS2(nn.Module):
@@ -57,8 +51,7 @@ class XPOS2(nn.Module):
         max_pos = length + offset + min_pos
         scale = self.scale ** torch.arange(min_pos, max_pos, 1).to(self.scale).div(self.scale_base)[:, None]
 
-        print("size of scale")
-        print(scale.shape)
+       
         sin, cos = fixed_pos_embedding(scale)
 
         if scale.shape[0] > length:
@@ -70,8 +63,7 @@ class XPOS2(nn.Module):
             scale = 1 / scale
 
         x = apply_rotary_pos_emb(x, sin, cos, scale)
-        print("rpos shape")
-        print(x.shape)
+        
         return x
 
     def forward_reverse(self, x, offset=0, downscale=False):
