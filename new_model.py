@@ -10,7 +10,7 @@ https://github.com/huggingface/transformers/blob/main/src/transformers/models/gp
 import math
 import inspect
 from dataclasses import dataclass
-from xpos_relative_position import XPOS
+from xpos_relative_position2 import XPOS2
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -26,49 +26,58 @@ class LayerNorm(nn.Module):
     def forward(self, input):
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
 
-class CausalSelfAttention(nn.Module):
+cclass CausalSelfAttention(nn.Module):
 
-    def __init__(self, config):
+    def __init__(self):
         super().__init__()
-        assert config.n_embd % config.n_head == 0
-        # key, query, value projections for all heads, but in a batch
-        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
-        # output projection
-        self.wo = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
-        # regularization
-        self.wg = nn.Linear(config.n_embd, config.n_embd,bias = False)
 
-        self.attn_dropout = nn.Dropout(config.dropout)
-        self.resid_dropout = nn.Dropout(config.dropout)
-        self.n_head = config.n_head
-        self.n_embd = config.n_embd
-        self.dropout = config.dropout
-        self.d_k = config.n_embd// config.n_head
-        self.group_norm = nn.GroupNorm(config.n_head, self.d_k)
+
+        assert n_embd % n_head == 0 # run the above code or it will give error
+        # key, query, value projections for all heads, but in a batch
+        self.c_attn = nn.Linear(n_embd, 3 * n_embd, bias=False)
+        # output projection
+        self.wo = nn.Linear(n_embd, n_embd, bias=False)
+        # regularization
+        self.wg = nn.Linear(n_embd, n_embd,bias = False)
+
+        self.attn_dropout = nn.Dropout(dropout)
+        self.resid_dropout = nn.Dropout(dropout)
+        self.n_head = n_head
+        self.n_embd = n_embd
+        self.dropout = dropout
+        self.d_k = n_embd// n_head
+        self.group_norm = nn.GroupNorm(n_head, self.d_k)
         self.swish = lambda x: x * torch.sigmoid(x)
-        self.xpos = XPOS(self.n_embd)
-        
-        self.gammas = (1 - torch.exp(torch.linspace(math.log(1/32), math.log(1/512), config.n_head))).detach().cpu().tolist()
+        self.xpos = XPOS2(self.n_embd)
+
+        self.gammas = (1 - torch.exp(torch.linspace(math.log(1/32), math.log(1/512), n_head))).detach().cpu().tolist()
 
         # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
         self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
         if not self.flash:
             print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
             # causal mask to ensure that attention is only applied to the left in the input sequence
-            self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
-                                        .view(1, 1, config.block_size, config.block_size))
+            self.register_buffer("bias", torch.tril(torch.ones(block_size, block_size))
+                                        .view(1, 1, block_size, block_size))
 
     def forward(self, x):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
         q, k, v  = self.c_attn(x).split(self.n_embd, dim=2)
-        query =self.xpos(q)
-        key =self.xpos(k)
-    
+        # query =self.xpos(q)
+        # key =self.xpos(k)
         k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        
+
+
+        q = self.xpos(q)
+        k = self.xpos.forward_reverse(k)
+        # q = theta_shift(q,sin ,cos)
+
+        # k = theta_shift(k,sin ,cos)
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         # if self.flash:
@@ -76,13 +85,14 @@ class CausalSelfAttention(nn.Module):
         #     y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
         # else:
             # manual implementation of attention
-        D = [self._get_D(self.new_method(T),gamma=gamma).to(device="cuda") for gamma in self.gammas]
+        D = [self._get_D(self.new_method(T),gamma=gamma) for gamma in self.gammas]
 
 
        # Convert the list of PyTorch tensors to a single PyTorch tensor
         D= torch.stack(D)
 
        # Add an extra dimension at the beginning
+
 
 
         att = (q @ k.transpose(-2, -1)) * D.unsqueeze(0)
@@ -92,11 +102,12 @@ class CausalSelfAttention(nn.Module):
         y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
 
+        # output projection
+         # multiply by  W_o
         y_shape = y.shape
         y = self.group_norm(y.reshape(-1, self.d_k)).reshape(y_shape)
 
         return self.wo(self.swish( self.wg(x)*y ))
-        
     def new_method(self, sequence_length):
         return sequence_length
 
