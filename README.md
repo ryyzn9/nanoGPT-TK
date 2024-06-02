@@ -1,5 +1,5 @@
 # Working with TK
-
+colab note book for test https://colab.research.google.com/drive/1BuSa4eA9Xw8k11OKcCVD6IFHWPIsmaPB?usp=sharing
 ## Install dependencies
 
 Follow instructions from NanoGPT README below
